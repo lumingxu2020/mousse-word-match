@@ -1,0 +1,10 @@
+data/
+*.tgz
+.env
+.env.*
+!.env.example
+node_modules/
+.DS_Store
+.docker-config/
+.openai/
+*.log

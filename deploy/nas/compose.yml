@@ -1,0 +1,38 @@
+name: word-match
+
+services:
+  word-match:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: word-match:2.0
+    container_name: word-match
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${WORD_MATCH_PORT:-3093}:3093"
+    environment:
+      WORD_MATCH_ADMIN_TOKEN: "${WORD_MATCH_ADMIN_TOKEN}"
+    volumes:
+      - ./data:/data:rw
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 96
+    mem_limit: 384m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3093/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
