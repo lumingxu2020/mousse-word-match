@@ -1,4 +1,4 @@
-import {SEED, LEVEL_UNITS, shuffle, filterWords, starsFor, firstIncompleteLevel, isLevelUnlocked, challengeTotal, parseVocabularyText, normalizeWords} from './game-core.js?v=2.1.0';
+import {SEED, LEVEL_UNITS, shuffle, filterWords, starsFor, firstIncompleteLevel, isLevelUnlocked, challengeTotal, parseVocabularyText, normalizeWords, normalizeProgress, challengeRounds} from './game-core.js?v=2.2.0';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -9,7 +9,16 @@ const storage = {
 
 let words;
 try { words = normalizeWords(storage.get('wordSquadLibrary', SEED)); } catch { words = structuredClone(SEED); }
-let progress = storage.get('wordSquadProgress', {});
+const oldProgress = storage.get('wordSquadProgress', {});
+let progress = normalizeProgress(oldProgress);
+if (!localStorage.getItem('wordSquadProgressBeforeMigration')) storage.set('wordSquadProgressBeforeMigration', oldProgress);
+storage.set('wordSquadProgress', progress);
+let pendingLibrary = storage.get('wordSquadPendingLibrary', null);
+if (pendingLibrary) { try { words = normalizeWords(pendingLibrary.words); } catch { pendingLibrary = null; } }
+let libraryRevision = storage.get('wordSquadLibraryRevision', null);
+let librarySaving = false;
+const gameTimers = new Set();
+let gameGeneration = 0;
 let game = {words:[], selected:null, matched:0, score:0, combo:0, mistakes:0, locked:false, level:null, startedAt:0};
 let soundOn = storage.get('wordSquadSound', true);
 let voices = [];
@@ -49,28 +58,62 @@ async function loadSharedLibrary() {
     const response = await fetch('/api/library', {headers:{Accept:'application/json'}});
     if (!response.ok) throw new Error('接口不可用');
     const data = await response.json();
-    words = normalizeWords(data.words);
-    storage.set('wordSquadLibrary', words);
-    setSyncState('已连接 NAS，共享词库已同步', 'online');
+    if (pendingLibrary) {
+      setSyncState('本机有未同步修改，已保留。请重试同步或载入服务端词库', 'offline');
+    } else {
+      words = normalizeWords(data.words);
+      libraryRevision = data.revision;
+      storage.set('wordSquadLibraryRevision', libraryRevision);
+      storage.set('wordSquadLibrary', words);
+      setSyncState('已连接服务端，词库已同步', 'online');
+    }
   } catch {
-    setSyncState('当前使用本机词库；连接 NAS 后会自动同步', 'offline');
+    setSyncState('当前使用本机词库；未同步修改会保留，可稍后重试', 'offline');
   }
   refreshLibraryViews();
 }
 
 async function persistLibrary(message = '词库已保存') {
+  if (librarySaving) { toast('正在保存，请稍候'); return false; }
   words = normalizeWords(words);
   storage.set('wordSquadLibrary', words);
   refreshLibraryViews();
+  pendingLibrary = {words, revision:pendingLibrary ? pendingLibrary.revision : libraryRevision};
+  storage.set('wordSquadPendingLibrary', pendingLibrary);
+  librarySaving = true;
+  $('#retrySync').disabled = true;
   try {
-    const response = await adminFetch('/api/library', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({words})});
+    const response = await adminFetch('/api/library', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(pendingLibrary)});
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || '保存失败');
-    setSyncState('已保存到 NAS，共享设备刷新后可见', 'online');
+    const result = await response.json();
+    libraryRevision = result.revision;
+    storage.set('wordSquadLibraryRevision', libraryRevision);
+    pendingLibrary = null;
+    localStorage.removeItem('wordSquadPendingLibrary');
+    setSyncState('已保存到服务端，其他设备刷新后可见', 'online');
     toast(message);
-  } catch {
-    setSyncState('已保存到本机，NAS 暂时无法连接', 'offline');
-    toast(`${message}（仅本机）`);
-  }
+    return true;
+  } catch (error) {
+    setSyncState(`尚未同步：${error.message}。本机修改已保留，可导出备份或重试`, 'offline');
+    toast('尚未保存到服务端，本机修改已保留');
+    return false;
+  } finally { librarySaving = false; $('#retrySync').disabled = false; }
+}
+
+function laterInGame(callback, delay) {
+  const generation = gameGeneration;
+  const timer = setTimeout(() => {
+    gameTimers.delete(timer);
+    if (generation === gameGeneration) callback();
+  }, delay);
+  gameTimers.add(timer);
+}
+
+function clearGameTimers() {
+  gameGeneration++;
+  for (const timer of gameTimers) clearTimeout(timer);
+  gameTimers.clear();
+  $('#board').classList.remove('locked');
 }
 
 function setSyncState(text, state) {
@@ -140,27 +183,39 @@ function startGame({level = null} = {}) {
   }
   const unit = $('#unit').value;
   const category = $('#category').value;
-  const count = Number($('#pairCount').value);
+  const count = activeLevel ? 6 : Number($('#pairCount').value);
   const pool = filterWords(words, unit, category);
   if (pool.length < 2) { toast('这个组合至少需要两个词语'); return; }
-  const chosen = shuffle(pool).slice(0, Math.min(count, pool.length));
+  clearGameTimers();
+  const rounds = activeLevel ? challengeRounds(shuffle(pool)) : [shuffle(pool).slice(0, Math.min(count, pool.length))];
+  const chosen = rounds[0];
+  game = {words:chosen, rounds, round:0, totalWords:activeLevel ? pool.length : chosen.length, selected:null, matched:0, score:0, combo:0, mistakes:0, locked:false, level:activeLevel, startedAt:Date.now(), completed:false};
+  $('#pairCount').disabled = Boolean(activeLevel);
+  $('#totalScoreWrap').hidden = !activeLevel;
+  renderRound();
+  showScreen('play');
+}
+
+function renderRound() {
+  const chosen = game.rounds[game.round];
+  game.words = chosen;
+  game.selected = null;
+  game.locked = false;
+  $('#board').classList.remove('locked');
   const cards = shuffle(chosen.flatMap(word => [
     {...word, text:word.en, side:'EN', lang:'en-US'},
     {...word, text:word.zh, side:'中文', lang:'zh-CN'}
   ]));
-  game = {words:chosen, selected:null, matched:0, score:0, combo:0, mistakes:0, locked:false, level:activeLevel, startedAt:Date.now()};
-  $('#totalScoreWrap').hidden = !activeLevel;
   updateGameStats();
-  $('#progressBar').style.width = '0%';
-  $('#gameMeta').textContent = activeLevel ? `闯关模式 · 第 ${activeLevel} 关` : '自由练习';
-  $('#missionTitle').textContent = activeLevel ? LEVEL_UNITS[activeLevel - 1] : `${unit} · ${category}`;
+  $('#progressBar').style.width = `${game.matched / game.totalWords * 100}%`;
+  $('#gameMeta').textContent = game.level ? `闯关模式 · 第 ${game.level} 关 · 第 ${game.round + 1}/${game.rounds.length} 轮 · 已配对 ${game.matched}/${game.totalWords}` : '自由练习';
+  $('#missionTitle').textContent = game.level ? LEVEL_UNITS[game.level - 1] : `${$('#unit').value} · ${$('#category').value}`;
   $('#board').replaceChildren(...cards.map((card, index) => {
     const button = el('button', {type:'button', className:'card', text:card.text, 'aria-label':`${card.side}：${card.text}`});
     Object.assign(button.dataset, {id:card.id, index:String(index), type:card.side, lang:card.lang});
     button.addEventListener('click', () => pickCard(button));
     return button;
   }));
-  showScreen('play');
 }
 
 function updateGameStats() {
@@ -191,9 +246,13 @@ function pickCard(card) {
     game.combo += 1;
     game.score += 100 + Math.max(0, game.combo - 1) * 20;
     game.selected = null;
-    $('#progressBar').style.width = `${game.matched / game.words.length * 100}%`;
+    $('#progressBar').style.width = `${game.matched / game.totalWords * 100}%`;
     updateGameStats();
-    if (game.matched === game.words.length) { game.locked = true; setTimeout(finishGame, 450); }
+    if (game.matched === game.totalWords) { game.locked = true; laterInGame(finishGame, 450); }
+    else if (!$('#board .card:not(.matched)')) {
+      game.locked = true;
+      laterInGame(() => { game.round++; renderRound(); toast('继续下一轮！本关分数已保留'); }, 650);
+    }
     return;
   }
   game.locked = true;
@@ -204,7 +263,7 @@ function pickCard(card) {
   game.combo = 0;
   game.score = Math.max(0, game.score - 10);
   updateGameStats();
-  setTimeout(() => {
+  laterInGame(() => {
     for (const item of [first, card]) {
       item.classList.remove('selected', 'wrong');
       item.setAttribute('aria-pressed', 'false');
@@ -217,6 +276,8 @@ function pickCard(card) {
 }
 
 function finishGame() {
+  if (game.completed) return;
+  game.completed = true;
   const stars = starsFor(game.mistakes);
   const seconds = Math.max(1, Math.round((Date.now() - game.startedAt) / 1000));
   const best = Number(storage.get('wordSquadBest', 0));
@@ -233,8 +294,8 @@ function finishGame() {
   const allCleared = game.level === LEVEL_UNITS.length && LEVEL_UNITS.every((_, index) => progress[index + 1]?.completed);
   $('#winTitle').textContent = allCleared ? '九关全部完成！' : game.level ? `第 ${game.level} 关完成！` : '配对训练完成！';
   $('#winSummary').textContent = game.level
-    ? `${game.words.length} 对词语 · ${game.mistakes} 次错误 · ${seconds} 秒 · 本关 ${game.score} 分 · 闯关总分 ${totalScore} 分`
-    : `${game.words.length} 对词语 · ${game.mistakes} 次错误 · ${seconds} 秒 · ${game.score} 分`;
+    ? `${game.totalWords} 对词语全部完成 · ${game.mistakes} 次错误 · ${seconds} 秒 · 本关 ${game.score} 分 · 闯关总分 ${totalScore} 分`
+    : `${game.totalWords} 对词语 · ${game.mistakes} 次错误 · ${seconds} 秒 · ${game.score} 分`;
   const hasNext = game.level && game.level < LEVEL_UNITS.length;
   $('#nextLevel').textContent = hasNext ? '下一关 →' : '再玩一次';
   $('#winDialog').showModal();
@@ -272,6 +333,7 @@ function renderLibrary() {
     const chinese = el('div', {text:word.zh});
     const remove = el('button', {type:'button', className:'delete-word', text:'×', 'aria-label':`删除 ${word.en}`});
     remove.addEventListener('click', async () => {
+      if (librarySaving) { toast('正在保存，请稍候'); return; }
       if (!confirm(`确定从共享词库中删除“${word.en}”吗？`)) return;
       words = words.filter(item => item.id !== word.id);
       await persistLibrary(`已删除 ${word.en}`);
@@ -330,6 +392,7 @@ function updateImportPreview() {
 
 async function importWords(event) {
   event.preventDefault();
+  if (librarySaving) { toast('正在保存，请稍候'); return; }
   const pairs = updateImportPreview();
   if (!pairs.length) { toast('没有可导入的新词语'); return; }
   const unit = $('#importUnit').value;
@@ -342,22 +405,33 @@ async function importWords(event) {
 }
 
 async function filesToOcr(files) {
+  if ($('#imageInput').disabled) { toast('正在识别图片，请稍候'); return; }
   const chosen = [...files].slice(0, 5);
   if (!chosen.length) return;
   if (chosen.some(file => file.size > 10 * 1024 * 1024)) { toast('每张图片不能超过 10MB'); return; }
   toast(`正在识别 ${chosen.length} 张图片…`);
+  $('#imageInput').disabled = true;
   try {
-    const images = await Promise.all(chosen.map(async file => ({name:file.name, type:file.type, data:(await readAsDataUrl(file)).split(',')[1]})));
-    const response = await adminFetch('/api/ocr', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({images})});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '识别失败');
-    const pairs = parseVocabularyText(result.text);
-    openImport(pairs.length ? pairs.map(pair => `${pair.en} = ${pair.zh}`).join('\n') : result.text);
+    const texts = [];
+    for (const [index, file] of chosen.entries()) {
+      toast(`正在识别第 ${index + 1}/${chosen.length} 张图片…`);
+      const image = {name:file.name, type:file.type, data:(await readAsDataUrl(file)).split(',')[1]};
+      const response = await adminFetch('/api/ocr', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({images:[image]})});
+      const result = await response.json();
+      if (!response.ok) {
+        if (texts.length) openImport(texts.join('\n'));
+        throw new Error(`第 ${index + 1} 张：${result.error || '识别失败'}`);
+      }
+      texts.push(result.text);
+    }
+    const text = texts.join('\n');
+    const pairs = parseVocabularyText(text);
+    openImport(pairs.length ? pairs.map(pair => `${pair.en} = ${pair.zh}`).join('\n') : text);
     toast(`识别完成，请核对 ${pairs.length} 对词语`);
   } catch (error) {
-    openImport();
+    if (!$('#importDialog').open) openImport();
     toast(`图片识别暂不可用：${error.message}`);
-  } finally { $('#imageInput').value = ''; }
+  } finally { $('#imageInput').value = ''; $('#imageInput').disabled = false; }
 }
 
 function readAsDataUrl(file) {
@@ -373,10 +447,11 @@ function downloadBackup() {
 }
 
 async function restoreBackup(file) {
+  if (librarySaving) { toast('正在保存，请稍候'); return; }
   try {
     const backup = JSON.parse(await file.text());
     words = normalizeWords(backup.words ?? backup);
-    if (backup.progress && typeof backup.progress === 'object') { progress = backup.progress; saveProgress(); }
+    if (backup.progress !== undefined) { progress = normalizeProgress(backup.progress); saveProgress(); }
     await persistLibrary('备份已恢复');
   } catch (error) { toast(`导入失败：${error.message}`); }
   $('#backupInput').value = '';
@@ -385,6 +460,21 @@ async function restoreBackup(file) {
 $$('.nav-btn').forEach(button => button.addEventListener('click', () => showScreen(button.dataset.screen)));
 $('#quickStart').addEventListener('click', () => startGame({level:firstIncompleteLevel(progress) === LEVEL_UNITS.length && progress[LEVEL_UNITS.length]?.completed ? 1 : firstIncompleteLevel(progress)}));
 $('#generateGame').addEventListener('click', () => startGame());
+$('#retrySync').addEventListener('click', () => persistLibrary());
+$('#loadServerLibrary').addEventListener('click', async () => {
+  if (librarySaving) return;
+  if (pendingLibrary && !confirm('载入服务端版本会替换本机未同步修改。请先导出备份，确定继续吗？')) return;
+  try {
+    const response = await fetch('/api/library');
+    if (!response.ok) throw new Error('无法连接服务端');
+    const data = await response.json();
+    const nextWords = normalizeWords(data.words);
+    words = nextWords; libraryRevision = data.revision; pendingLibrary = null;
+    localStorage.removeItem('wordSquadPendingLibrary');
+    storage.set('wordSquadLibrary', words); storage.set('wordSquadLibraryRevision', libraryRevision);
+    refreshLibraryViews(); setSyncState('已载入服务端最新词库', 'online');
+  } catch (error) { toast(error.message); }
+});
 $('#mode').addEventListener('change', configureMode);
 $('#librarySearch').addEventListener('input', renderLibrary);
 $('#soundToggle').addEventListener('click', () => { soundOn = !soundOn; storage.set('wordSquadSound', soundOn); renderSoundButton(); toast(soundOn ? '语音已打开' : '语音已关闭'); });
@@ -402,7 +492,7 @@ $('#dropZone').addEventListener('drop', event => filesToOcr(event.dataTransfer.f
 $('#exportBackup').addEventListener('click', downloadBackup);
 $('#importBackup').addEventListener('click', () => $('#backupInput').click());
 $('#backupInput').addEventListener('change', event => event.target.files[0] && restoreBackup(event.target.files[0]));
-$('#resetLibrary').addEventListener('click', async () => { if (!confirm('恢复课本词库会替换共享词库。建议先导出备份，确定继续吗？')) return; words = structuredClone(SEED); await persistLibrary('已恢复 92 个课本词语'); });
+$('#resetLibrary').addEventListener('click', async () => { if (librarySaving) { toast('正在保存，请稍候'); return; } if (!confirm('恢复课本词库会替换共享词库。建议先导出备份，确定继续吗？')) return; words = structuredClone(SEED); await persistLibrary('已恢复 92 个课本词语'); });
 $('#backHome').addEventListener('click', () => { $('#winDialog').close(); showScreen('home'); });
 $('#nextLevel').addEventListener('click', () => { const next = game.level && game.level < LEVEL_UNITS.length ? game.level + 1 : game.level || null; $('#winDialog').close(); next ? startGame({level:next}) : startGame(); });
 

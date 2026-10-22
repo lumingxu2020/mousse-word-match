@@ -7,7 +7,7 @@
   <meta name="description" content="适合孩子的中英文配对闯关游戏">
   <title>词语突击队 · 中英消消乐</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="style.css?v=2.1.0">
+  <link rel="stylesheet" href="style.css?v=2.2.0">
 </head>
 <body data-theme="tactical">
   <div class="ambient" aria-hidden="true"><i></i><i></i><i></i></div>
@@ -23,7 +23,7 @@
         <article class="panel mission">
           <div class="eyebrow">今日任务 · 二年级上册</div>
           <h2 id="homeTitle">找到中英文搭档，完成词语行动！</h2>
-          <p>点击卡片会朗读单词。答对会增加连击奖励，完成当前关卡后解锁下一关。</p>
+          <p>点击卡片会朗读单词。每轮最多 6 对，完成整个单元才会解锁下一关；分数和连击跨轮保留。</p>
           <div class="quick-stats">
             <div class="stat"><strong id="wordCount">92</strong><span>词语档案</span></div>
             <div class="stat"><strong id="bestScore">0</strong><span>闯关总分</span></div>
@@ -76,9 +76,10 @@
       <div class="manage-grid">
         <div class="panel">
           <div class="eyebrow">更新词库</div><h2 id="libraryTitle">上传课本图片</h2>
-          <label class="drop" id="dropZone"><input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple><span class="drop-icon">📸</span><strong>选择或拖入课本图片</strong><span class="helper">NAS 会识别中英文文字，识别后请在预览中核对再导入。</span></label>
+          <label class="drop" id="dropZone"><input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple><span class="drop-icon">📸</span><strong>选择或拖入课本图片</strong><span class="helper">服务端会识别中英文文字，识别后请在预览中核对再导入。</span></label>
           <div class="library-actions"><button class="secondary" id="manualImport" type="button">粘贴词语</button><button class="secondary" id="importBackup" type="button">导入备份</button><button class="secondary" id="exportBackup" type="button">导出备份</button><input id="backupInput" type="file" accept="application/json,.json" hidden></div>
-          <p class="sync-state" id="syncState">正在连接 NAS 词库…</p>
+          <p class="sync-state" id="syncState">正在连接服务端词库…</p>
+          <div class="library-actions"><button class="secondary" id="retrySync" type="button">重试同步</button><button class="secondary" id="loadServerLibrary" type="button">载入服务端词库</button></div>
         </div>
         <div class="panel">
           <div class="side-title"><div><div class="eyebrow">共享词语档案</div><h2><span id="libraryCount">0</span> 个词</h2></div><button class="secondary danger-outline" id="resetLibrary" type="button">恢复课本词库</button></div>
@@ -111,6 +112,6 @@
     <div class="dialog-body win-dialog"><div class="win-badge" aria-hidden="true">🏆</div><div class="eyebrow">任务完成</div><h3 id="winTitle">配对成功！</h3><div class="win-stars" id="winStars">★★★</div><p id="winSummary"></p><div class="dialog-actions centered"><button class="secondary" id="backHome" type="button">返回地图</button><button class="primary" id="nextLevel" type="button">下一关 →</button></div></div>
   </dialog>
 
-  <script type="module" src="app.js?v=2.1.0"></script>
+  <script type="module" src="app.js?v=2.2.0"></script>
 </body>
 </html>

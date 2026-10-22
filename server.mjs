@@ -45,8 +45,8 @@ function writeJson(target, value) {
 }
 
 function readLibrary() {
-  try { return {words:normalizeWords(JSON.parse(fs.readFileSync(libraryFile, 'utf8')).words)}; }
-  catch { return {words:structuredClone(SEED)}; }
+  const data = JSON.parse(fs.readFileSync(libraryFile, 'utf8'));
+  return {words:normalizeWords(data.words), revision:Number(data.revision) || 0};
 }
 
 function headers(extra = {}) {
@@ -115,10 +115,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/library' && req.method === 'PUT') {
       if (!authorized(req)) return sendJson(res, 401, {error:'请输入正确的词库管理密码'});
       const body = await readBody(req, 2 * 1024 * 1024);
+      const current = readLibrary();
+      if (body.revision !== current.revision) return sendJson(res, 409, {error:'词库已在其他设备更新，请先核对服务端版本', revision:current.revision});
       const words = normalizeWords(body.words);
       if (fs.existsSync(libraryFile)) fs.copyFileSync(libraryFile, previousFile);
-      writeJson(libraryFile, {version:1, updatedAt:new Date().toISOString(), words});
-      return sendJson(res, 200, {ok:true, count:words.length});
+      writeJson(libraryFile, {version:1, revision:current.revision + 1, updatedAt:new Date().toISOString(), words});
+      return sendJson(res, 200, {ok:true, count:words.length, revision:current.revision + 1});
     }
     if (url.pathname === '/api/ocr' && req.method === 'POST') {
       if (!authorized(req)) return sendJson(res, 401, {error:'请输入正确的词库管理密码'});

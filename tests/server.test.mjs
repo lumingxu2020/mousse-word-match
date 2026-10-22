@@ -27,8 +27,11 @@ test('服务端鉴权、共享词库持久化和静态页面', async t => {
   const denied = await fetch(`http://127.0.0.1:${port}/api/library`, {method:'PUT', headers:{'content-type':'application/json'}, body:JSON.stringify({words:SEED})});
   assert.equal(denied.status, 401);
   const custom = [...SEED, {id:'custom-test',en:'test word',zh:'测试词',unit:'自定义词库',category:'自定义'}];
-  const saved = await fetch(`http://127.0.0.1:${port}/api/library`, {method:'PUT', headers:{'content-type':'application/json','x-admin-token':token}, body:JSON.stringify({words:custom})});
+  const saved = await fetch(`http://127.0.0.1:${port}/api/library`, {method:'PUT', headers:{'content-type':'application/json','x-admin-token':token}, body:JSON.stringify({words:custom, revision:0})});
   assert.equal(saved.status, 200);
+  assert.equal((await saved.json()).revision, 1);
+  const conflict = await fetch(`http://127.0.0.1:${port}/api/library`, {method:'PUT', headers:{'content-type':'application/json','x-admin-token':token}, body:JSON.stringify({words:SEED, revision:0})});
+  assert.equal(conflict.status, 409);
   child.kill();
   await new Promise(resolve => child.once('exit', resolve));
   await start();

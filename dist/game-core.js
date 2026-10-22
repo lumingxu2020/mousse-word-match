@@ -48,6 +48,26 @@ export function challengeTotal(progress) {
   }, 0);
 }
 
+export function normalizeProgress(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const output = {};
+  for (let level = 1; level <= LEVEL_UNITS.length; level++) {
+    const record = input[level];
+    const best = Number(typeof record === 'number' ? record : record?.best);
+    if (!Number.isFinite(best) || best < 0 || best > 10000000) continue;
+    output[level] = {completed:typeof record === 'number' ? true : record.completed === true,
+      best, stars:typeof record === 'number' ? 1 : Math.min(3, Math.max(1, Math.trunc(Number(record.stars) || 1)))};
+  }
+  return output;
+}
+
+export function challengeRounds(words) {
+  const rounds = [];
+  for (let index = 0; index < words.length; index += 6) rounds.push(words.slice(index, index + 6));
+  if (rounds.length > 1 && rounds.at(-1).length === 1) rounds.at(-1).unshift(rounds.at(-2).pop());
+  return rounds;
+}
+
 export function parseVocabularyText(text) {
   const ignored = /^(unit\s*\d+|word(s)?( and expressions| list)?|proper nouns?|names?|others?|[a-z])$/i;
   const pairs = [];
@@ -74,6 +94,7 @@ export function parseVocabularyText(text) {
 export function normalizeWords(input) {
   if (!Array.isArray(input)) throw new Error('词库格式不正确');
   const seen = new Set();
+  const ids = new Set();
   const output = [];
   for (const item of input) {
     const en = String(item?.en || '').trim().slice(0, 100);
@@ -83,7 +104,10 @@ export function normalizeWords(input) {
     const key = en.toLocaleLowerCase('en');
     if (!en || !zh || seen.has(key)) continue;
     seen.add(key);
-    output.push({id:String(item?.id || `custom-${cryptoId()}`).slice(0, 100), en, zh, unit, category});
+    let id = String(item?.id || `custom-${cryptoId()}`).slice(0, 100);
+    if (ids.has(id)) id = `custom-${cryptoId()}`;
+    ids.add(id);
+    output.push({id, en, zh, unit, category});
   }
   if (output.length < 2 || output.length > 2000) throw new Error('词库须包含 2–2000 个有效词语');
   return output;
